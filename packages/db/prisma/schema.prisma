@@ -1,0 +1,462 @@
+// TelegramTakip - Database Schema
+// Generator + datasource
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ============================================================
+// AppSettings — sistem geneli ayarlar (SMTP, admin bildirim vs.)
+// Tek satır (singleton). id her zaman "global".
+// ============================================================
+model AppSettings {
+  id                     String    @id @default("global")
+
+  // SMTP
+  smtpHost               String?
+  smtpPort               Int?      @default(587)
+  smtpSecure             Boolean   @default(false)
+  smtpUser               String?
+  smtpPassEncrypted      String?   // AES-256-GCM ile şifreli
+  emailFromName          String?
+  emailFromAddress       String?
+
+  // Admin bildirim adresi
+  adminNotificationEmail String?
+
+  // Son test durumu
+  lastTestAt             DateTime?
+  lastTestOk             Boolean?
+  lastTestMessage        String?
+
+  // Trial ayarları
+  trialEnabled           Boolean   @default(true)
+  trialDays              Int       @default(14)
+  trialDefaultPlan       String    @default("PRO") // Trial'da hangi plan limitlerini görsün
+
+  updatedAt              DateTime  @updatedAt
+  updatedBy              String?
+
+  @@map("app_settings")
+}
+
+// ============================================================
+// Tenant (SaaS müşterisi - kanal sahibi)
+// ============================================================
+model Tenant {
+  id              String   @id @default(cuid())
+  email           String   @unique
+  passwordHash    String
+  fullName        String?
+  plan            String   @default("STARTER") // PlanConfig.key ile eşleşir
+  subExpiresAt    DateTime?
+  isSuperAdmin    Boolean  @default(false)
+  isSuspended     Boolean  @default(false)
+  suspendedReason String?
+  lastLoginAt     DateTime?
+  adminNotes      String?  // sadece admin görür
+  planOverride    Json?    // Seviye 3: tenant'a özel limit/fiyat override
+  isOnTrial       Boolean  @default(false)
+  trialEndsAt     DateTime?
+
+  // E-posta doğrulama
+  emailVerifiedAt DateTime?
+
+  // Bildirim tercihleri
+  notifyOnNewReceipt Boolean @default(true)
+  notifyOnSubExpiry  Boolean @default(true)
+
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  bots            Bot[]
+  paymentMethods  PaymentMethod[]
+  subscriptions   Subscription[]
+  auditLog        AdminAuditLog[]  @relation("AdminActor")
+  targetedLog     AdminAuditLog[]  @relation("AdminTarget")
+  verificationTokens EmailVerificationToken[]
+  resetTokens        PasswordResetToken[]
+
+  @@index([isSuperAdmin])
+  @@map("tenants")
+}
+
+// ============================================================
+// EmailVerificationToken — kayıt sonrası doğrulama linki
+// ============================================================
+model EmailVerificationToken {
+  id         String   @id @default(cuid())
+  tenantId   String
+  tokenHash  String   @unique
+  expiresAt  DateTime
+  usedAt     DateTime?
+  createdAt  DateTime @default(now())
+
+  tenant     Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@index([tenantId])
+  @@index([expiresAt])
+  @@map("email_verification_tokens")
+}
+
+// ============================================================
+// PasswordResetToken — şifre sıfırlama linki
+// ============================================================
+model PasswordResetToken {
+  id         String   @id @default(cuid())
+  tenantId   String
+  tokenHash  String   @unique
+  expiresAt  DateTime
+  usedAt     DateTime?
+  createdAt  DateTime @default(now())
+
+  tenant     Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@index([tenantId])
+  @@index([expiresAt])
+  @@map("password_reset_tokens")
+}
+
+// ============================================================
+// Subscription (SaaS müşteri ödemesi — sen kendi tenant'larından aldıkların)
+// ============================================================
+model Subscription {
+  id              String            @id @default(cuid())
+  tenantId        String
+  plan            String            // PlanConfig.key
+  amount          Decimal           @db.Decimal(10, 2)
+  currency        String            @default("TRY")
+  // Manuel: IBAN_TRANSFER, MANUAL_CASH  // Otomatik: PAYTR, IYZICO
+  method          String
+  status          SubscriptionStatus @default(PAID) // manuel kayıtlar direkt PAID, ödeme akışlar PENDING
+  periodStart     DateTime
+  periodEnd       DateTime
+  note            String?
+  recordedBy      String?           // bu kaydı oluşturan admin id
+  billingMethodId String?           // ödeme sağlayıcı ile başlatılan akışlarda
+  providerRef     String?           // ödeme sağlayıcı referansı
+  couponId        String?           // uygulanmış kupon
+  couponSaved     Decimal?          @db.Decimal(10, 2)
+  paidAt          DateTime?
+  createdAt       DateTime          @default(now())
+
+  tenant          Tenant            @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@index([tenantId])
+  @@index([periodEnd])
+  @@index([status])
+  @@map("subscriptions")
+}
+
+enum SubscriptionStatus {
+  PENDING     // Ödeme başlatıldı, henüz onaylanmadı
+  PAID        // Ödeme alındı, plan aktif
+  FAILED      // Ödeme başarısız
+  CANCELLED   // İptal
+}
+
+// ============================================================
+// SaasBillingMethod — SaaS sahibi (sen) tenant'lardan tahsilat için kullandığın yöntemler
+// ============================================================
+model SaasBillingMethod {
+  id              String       @id @default(cuid())
+  type            PaymentType
+  label           String
+  credentials     String       // AES-256-GCM ile şifreli
+  isActive        Boolean      @default(true)
+  ibanInfo        String?      // IBAN tipiyse müşteriye gösterilecek metin
+  createdAt       DateTime     @default(now())
+  updatedAt       DateTime     @updatedAt
+
+  @@map("saas_billing_methods")
+}
+
+// ============================================================
+// AdminAuditLog (Admin tarafında kim ne yaptı)
+// ============================================================
+model AdminAuditLog {
+  id              String   @id @default(cuid())
+  actorId         String   // adminin id'si
+  targetId        String?  // etkilenen tenant id (varsa)
+  action          String   // ör. tenant.suspend, tenant.change_plan
+  details         Json?
+  createdAt       DateTime @default(now())
+
+  actor           Tenant   @relation("AdminActor", fields: [actorId], references: [id])
+  target          Tenant?  @relation("AdminTarget", fields: [targetId], references: [id])
+
+  @@index([actorId])
+  @@index([targetId])
+  @@index([createdAt])
+  @@map("admin_audit_log")
+}
+
+// ============================================================
+// PlanConfig — SaaS abonelik planları (DB-driven, admin panelden yönetilir)
+// ============================================================
+model PlanConfig {
+  id                    String   @id @default(cuid())
+  key                   String   @unique // STARTER, PRO, BUSINESS veya özel: "AGENCY"
+  name                  String   // Görünen ad: "Starter", "Ajans Paketi"
+  description           String?
+  monthlyPriceTRY       Decimal  @db.Decimal(10, 2)
+  maxBots               Int
+  maxChannelsPerBot     Int
+  maxActiveMembers      Int
+  allowedPaymentMethods String[] // ["IBAN", "PAYTR", "IYZICO"]
+  features              String[] // Landing'de gösterilen bullet'lar
+  isActive              Boolean  @default(true) // Yeni satın alımlara açık mı
+  isPublic              Boolean  @default(true) // Landing'de gösterilsin mi (gizli özel plan)
+  sortOrder             Int      @default(0)
+  // Seviye 3: Çoklu ay indirim çarpanları
+  quarterlyMultiplier   Decimal? @db.Decimal(4, 3) // 3 ay örn 0.900 = %10 indirim
+  yearlyMultiplier      Decimal? @db.Decimal(4, 3) // 12 ay örn 0.800 = %20 indirim
+  createdAt             DateTime @default(now())
+  updatedAt             DateTime @updatedAt
+
+  @@index([isActive, isPublic])
+  @@map("plans")
+}
+
+// ============================================================
+// Coupon — İskonto/promosyon kodları
+// ============================================================
+model Coupon {
+  id                String    @id @default(cuid())
+  code              String    @unique
+  description       String?
+  discountPercent   Int?      // 10 = %10 indirim
+  discountAmount    Decimal?  @db.Decimal(10, 2) // sabit TL indirim
+  validFrom         DateTime  @default(now())
+  validUntil        DateTime?
+  usageLimit        Int?      // Toplam kullanım limiti
+  usageCount        Int       @default(0)
+  perTenantLimit    Int?      // Tek tenant kaç kez kullanabilir
+  applicableToPlans String[]  // Boş = tüm planlar; ["PRO"] = sadece PRO'da geçerli
+  isActive          Boolean   @default(true)
+  createdAt         DateTime  @default(now())
+  updatedAt         DateTime  @updatedAt
+
+  redemptions       CouponRedemption[]
+
+  @@index([isActive])
+  @@map("coupons")
+}
+
+model CouponRedemption {
+  id             String   @id @default(cuid())
+  couponId       String
+  tenantId       String
+  subscriptionId String?
+  amountSaved    Decimal  @db.Decimal(10, 2)
+  createdAt      DateTime @default(now())
+
+  coupon         Coupon   @relation(fields: [couponId], references: [id], onDelete: Cascade)
+
+  @@index([couponId])
+  @@index([tenantId])
+  @@map("coupon_redemptions")
+}
+
+// ============================================================
+// Bot (Tenant'ın eklediği Telegram botu)
+// ============================================================
+model Bot {
+  id              String   @id @default(cuid())
+  tenantId        String
+  botToken        String   // AES-256-GCM şifreli
+  botUsername     String   // BotFather'dan, @ olmadan
+  botName         String?
+  webhookSecret   String   // Webhook doğrulaması için, hex
+  isActive        Boolean  @default(true)
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  tenant          Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  channels        Channel[]
+
+  @@index([tenantId])
+  @@map("bots")
+}
+
+// ============================================================
+// Channel (Botun bağlı olduğu Telegram kanalı/grubu)
+// ============================================================
+model Channel {
+  id                String   @id @default(cuid())
+  botId             String
+  telegramChatId    BigInt   // Telegram chat id (negatif)
+  name              String
+  welcomeMessage    String   @default("Merhaba! Kanalımıza katılmak için aşağıdaki ödeme bilgilerini kullanabilirsin.")
+  ibanInfo          String?  // Ad Soyad + IBAN + Açıklama
+  currency          String   @default("TRY")
+  isActive          Boolean  @default(true)
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+
+  bot               Bot      @relation(fields: [botId], references: [id], onDelete: Cascade)
+  packages          Package[]
+  joinRequests      JoinRequest[]
+  memberships       Membership[]
+
+  @@unique([botId, telegramChatId])
+  @@index([botId])
+  @@map("channels")
+}
+
+// ============================================================
+// Package (Üyelik paketi - 1 ay / 3 ay / yıllık vs.)
+// ============================================================
+model Package {
+  id              String   @id @default(cuid())
+  channelId       String
+  name            String   // "1 Aylık", "3 Aylık", "Yıllık"
+  price           Decimal  @db.Decimal(10, 2)
+  durationDays    Int      // 30, 90, 365
+  sortOrder       Int      @default(0)
+  isActive        Boolean  @default(true)
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  channel         Channel  @relation(fields: [channelId], references: [id], onDelete: Cascade)
+  orders          Order[]
+
+  @@index([channelId])
+  @@map("packages")
+}
+
+// ============================================================
+// JoinRequest (Kanala katılma isteği)
+// ============================================================
+model JoinRequest {
+  id                  String           @id @default(cuid())
+  channelId           String
+  telegramUserId      BigInt
+  telegramUsername    String?
+  firstName           String?
+  lastName            String?
+  requestedAt         DateTime         @default(now())
+  status              JoinRequestStatus @default(PENDING)
+  processedAt         DateTime?
+
+  channel             Channel          @relation(fields: [channelId], references: [id], onDelete: Cascade)
+  orders              Order[]
+
+  @@unique([channelId, telegramUserId])
+  @@index([channelId, status])
+  @@map("join_requests")
+}
+
+enum JoinRequestStatus {
+  PENDING      // Kullanıcı istek attı, ödeme bekleniyor
+  PAID         // Ödeme alındı, kanala alındı
+  REJECTED     // Reddedildi (sahte dekont vs.)
+  EXPIRED      // Çok uzun süre ödeme yapmadı
+}
+
+// ============================================================
+// Order (Ödeme süreci)
+// ============================================================
+model Order {
+  id                  String       @id @default(cuid())
+  joinRequestId       String
+  packageId           String
+  amount              Decimal      @db.Decimal(10, 2)
+  paymentMethod       PaymentType
+  status              OrderStatus  @default(AWAITING_PAYMENT)
+
+  // IBAN dekont için
+  receiptUrl          String?      // R2 URL veya lokal path
+  receiptUploadedAt   DateTime?
+
+  // Otomatik ödemeler için (Faz 2)
+  providerRef         String?      // PayTR order_id, Iyzico paymentId vs.
+
+  paidAt              DateTime?
+  approvedBy          String?      // Onaylayan tenant user id (manuel onayda)
+  rejectionReason     String?
+
+  createdAt           DateTime     @default(now())
+  updatedAt           DateTime     @updatedAt
+
+  joinRequest         JoinRequest  @relation(fields: [joinRequestId], references: [id], onDelete: Cascade)
+  package             Package      @relation(fields: [packageId], references: [id])
+  memberships         Membership[] // aktifken bir tane; yenilemede yeni order membership'i devralır
+
+  @@index([status])
+  @@index([joinRequestId])
+  @@map("orders")
+}
+
+enum OrderStatus {
+  AWAITING_PAYMENT     // Kullanıcı henüz dekont yüklemedi / ödeme yapmadı
+  AWAITING_APPROVAL    // Dekont yüklendi, manuel onay bekleniyor
+  APPROVED             // Onaylandı, üyelik aktif
+  REJECTED             // Reddedildi
+  CANCELLED            // İptal edildi (süre doldu vs.)
+}
+
+enum PaymentType {
+  IBAN
+  PAYTR
+  IYZICO
+  STRIPE
+  USDT_TRC20
+}
+
+// ============================================================
+// Membership (Aktif kanal üyeliği - süre takibi)
+// ============================================================
+model Membership {
+  id                  String           @id @default(cuid())
+  channelId           String
+  telegramUserId      BigInt
+  telegramUsername    String?
+  orderId             String           // en son ödeme; yenilemede güncellenir
+  startedAt           DateTime         @default(now())
+  expiresAt           DateTime
+  kickJobId           String?          // BullMQ job id (süre dolunca atma)
+  warningJobId        String?          // BullMQ job id (süreden 3 gün önce uyarı)
+  status              MembershipStatus @default(ACTIVE)
+  kickedAt            DateTime?
+
+  createdAt           DateTime         @default(now())
+  updatedAt           DateTime         @updatedAt
+
+  channel             Channel          @relation(fields: [channelId], references: [id], onDelete: Cascade)
+  order               Order            @relation(fields: [orderId], references: [id])
+
+  @@unique([channelId, telegramUserId]) // her kullanıcının bir kanalda tek üyeliği olsun (yenilemede güncellenir)
+  @@index([channelId, status])
+  @@index([expiresAt, status])
+  @@map("memberships")
+}
+
+enum MembershipStatus {
+  ACTIVE
+  EXPIRED      // Süresi doldu, atıldı
+  REVOKED      // Manuel iptal (refund vs.)
+}
+
+// ============================================================
+// PaymentMethod (Tenant'ın kabul ettiği ödeme yöntemleri - Faz 2)
+// ============================================================
+model PaymentMethod {
+  id              String       @id @default(cuid())
+  tenantId        String
+  type            PaymentType
+  label           String       // "Ana PayTR hesabım" gibi
+  credentials     String       // AES-256-GCM şifreli JSON (API key, secret vs.)
+  isActive        Boolean      @default(true)
+  createdAt       DateTime     @default(now())
+  updatedAt       DateTime     @updatedAt
+
+  tenant          Tenant       @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@index([tenantId])
+  @@map("payment_methods")
+}

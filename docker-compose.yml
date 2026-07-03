@@ -1,0 +1,41 @@
+# Lokal geliştirme için Postgres + Redis
+# Kullanım: pnpm docker:up
+# Durdurmak için: pnpm docker:down
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: tt-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-tt}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-tt_dev_password_change_me}
+      POSTGRES_DB: ${POSTGRES_DB:-telegramtakip}
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-tt} -d ${POSTGRES_DB:-telegramtakip}"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  redis:
+    image: redis:7-alpine
+    container_name: tt-redis
+    restart: unless-stopped
+    command: ["redis-server", "--appendonly", "yes"]
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+volumes:
+  postgres_data:
+  redis_data:

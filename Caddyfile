@@ -1,0 +1,17 @@
+# Caddyfile - otomatik HTTPS, reverse proxy
+# Düzenle: kanalbot.com → kendi domain'in
+# Caddy Let's Encrypt'ten sertifikayı otomatik alır
+
+# API + Telegram webhook
+api.kanalbot.com {
+    encode gzip
+    reverse_proxy api:3001 {
+        header_up X-Real-IP {remote_host}
+    }
+}
+
+# Web panel
+kanalbot.com, www.kanalbot.com {
+    encode gzip
+    reverse_proxy web:3000
+}
