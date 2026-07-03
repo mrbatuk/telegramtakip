@@ -32,7 +32,9 @@ COPY apps/api/package.json ./apps/api/
 COPY packages/db/package.json ./packages/db/
 COPY packages/db/prisma ./packages/db/prisma
 
-RUN pnpm install --frozen-lockfile --prod
+# Not: --prod kaldırıldı, prisma CLI (devDependency) generate için gerekli.
+# Demo image; boyut kritik değil.
+RUN pnpm install --frozen-lockfile
 RUN pnpm --filter @tt/db exec prisma generate
 
 # Build çıktıları
