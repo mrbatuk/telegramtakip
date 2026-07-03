@@ -10,6 +10,9 @@ RUN pnpm install --frozen-lockfile
 
 COPY apps/web ./apps/web
 
+# rewrites() build-time'da NEXT_PUBLIC_API_URL'i bake eder — build args ile geç
+ARG NEXT_PUBLIC_API_URL=http://api:3001
+ENV NEXT_PUBLIC_API_URL=$NEXT_PUBLIC_API_URL
 ENV NEXT_TELEMETRY_DISABLED=1
 RUN pnpm --filter @tt/web build
 
