@@ -1,5 +1,5 @@
 'use client';
-import { useEffect, useState } from 'react';
+import { Suspense, useEffect, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { useSearchParams } from 'next/navigation';
 import {
@@ -55,6 +55,14 @@ interface BillingMethod {
 
 
 export default function SubscriptionPage() {
+  return (
+    <Suspense fallback={<div className="card p-6"><div className="skeleton h-24" /></div>}>
+      <SubscriptionPageInner />
+    </Suspense>
+  );
+}
+
+function SubscriptionPageInner() {
   const [data, setData] = useState<SubData | null>(null);
   const [billingMethods, setBillingMethods] = useState<BillingMethod[]>([]);
   const [modalPlan, setModalPlan] = useState<string | null>(null);

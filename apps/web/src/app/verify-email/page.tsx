@@ -1,5 +1,5 @@
 'use client';
-import { useEffect, useState } from 'react';
+import { Suspense, useEffect, useState } from 'react';
 import { useSearchParams } from 'next/navigation';
 import Link from 'next/link';
 import { Send, CheckCircle2, XCircle, RefreshCw, ArrowRight } from 'lucide-react';
@@ -8,6 +8,14 @@ import { api, ApiError } from '@/lib/api';
 type State = 'loading' | 'success' | 'error' | 'missing';
 
 export default function VerifyEmailPage() {
+  return (
+    <Suspense fallback={null}>
+      <VerifyEmailInner />
+    </Suspense>
+  );
+}
+
+function VerifyEmailInner() {
   const params = useSearchParams();
   const token = params.get('token');
   const [state, setState] = useState<State>('loading');

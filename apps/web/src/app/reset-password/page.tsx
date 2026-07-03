@@ -1,11 +1,19 @@
 'use client';
-import { useState } from 'react';
+import { Suspense, useState } from 'react';
 import { useSearchParams } from 'next/navigation';
 import Link from 'next/link';
 import { Send, ArrowRight, CheckCircle2, AlertCircle } from 'lucide-react';
 import { api, ApiError } from '@/lib/api';
 
 export default function ResetPasswordPage() {
+  return (
+    <Suspense fallback={null}>
+      <ResetPasswordInner />
+    </Suspense>
+  );
+}
+
+function ResetPasswordInner() {
   const params = useSearchParams();
   const token = params.get('token') ?? '';
 
